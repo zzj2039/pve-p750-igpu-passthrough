@@ -145,13 +145,22 @@ if (host_bridge->vendor != PCI_VENDOR_ID_INTEL ||
 
 **结论：这是技嘉 BIOS 的 PCI class code 枚举缺陷，与 IGD OpRegion 无关。**
 
-### 3.5 为什么补丁有效，以及更精细的方案
+### 3.5 补丁的两个变体（推荐用精细版）
 
-补丁让 `vfio_pci_igd_init()` 整体直接返回 0，两个子函数都不执行，因此绕过了 ② 的 class 校验。
-代价是 ① 也没执行——opregion region 没有注册给 QEMU，所以 QEMU 不会进入 IGD legacy 模式，显示输出不可用（本方案本来也不需要显示）。
+| 变体 | 改法 | 结果 |
+|---|---|---|
+| **精细版（推荐，已验证）** | 把 `vfio_pci_igd_init()` 里 `cmpl $0x60000,0x44(%rax)` 的立即数改成实际的 `0x060400`（2 字节） | 校验通过，**opregion / host bridge / LPC 三个 region 全部正常注册**，QEMU 识别为真正的 Intel IGD |
+| 粗暴版（备用） | 把 `vfio_pci_igd_init()` 入口改成 `xor eax,eax; ret` | 设备能用，但 QEMU 只当普通 PCI 设备，拿不到 VBT |
 
-理论上更精细的做法是**只跳过 ②、保留 ①**：opregion 仍会注册给 QEMU，
-IGD legacy 模式有可能完整工作，连显示输出都可能恢复。这一点未验证。
+精细版启动后 QEMU 会打印：
+
+```
+info: OpRegion detected on Intel display 4c90.
+```
+
+粗暴版没有这一行。对 QSV / OpenCL 这类算力用途，精细版更好——Intel 驱动初始化时会读 VBT 决定媒体引擎配置。
+
+**关于显示输出**：精细版虽然提供了完整 opregion，`legacy-igd=1` 仍然**不出画面**——因为 QEMU 的 IGD legacy 模式只自动启用 6~9 代（Sandy Bridge ~ Comet Lake），Rocket Lake 是第 12 代，不在范围内（QEMU 10.1+ 明确限制）。实测黑屏，属预期。
 
 ### 3.6 与 Proxmox 论坛同类案例的对比
 
@@ -201,15 +210,29 @@ IGD legacy 模式有可能完整工作，连显示输出都可能恢复。这一
 
 ### 5.1 原理
 
-把 `vfio_pci_igd_init()` 的入口改成直接返回 0（`xor eax, eax; ret`），
-等价于告诉内核"IGD 初始化成功"。
+**精细版（默认，推荐）**——只改一处比较的立即数：
 
-补丁后，QEMU 端因检测不到 opregion region，会把该设备当成普通 PCI 设备直通，
-不再走 IGD legacy 分支——正好符合"只要算力、不要显示"的用途。
+```asm
+bf3: 81 78 44 00 00 06 00   cmpl $0x60000,0x44(%rax)   ; 原值
+bfa: 0f 85 bb 00 00 00      jne  错误分支
+
+      81 78 44 00 04 06 00   cmpl $0x60400,0x44(%rax)   ; 补丁后
+```
+
+比较通过后 `jne` 不再跳转，函数继续按原逻辑执行，opregion / host bridge / LPC
+三个 region 都正常注册，QEMU 识别为真正的 Intel IGD。
+
+**粗暴版（回退）**——把函数入口改成 `xor eax, eax; ret`，直接返回成功：
+
+```asm
+31 c0 c3                    xor eax,eax ; ret
+```
+
+设备能被打开，但 QEMU 拿不到 opregion region，只当普通 PCI 设备处理。
 
 ### 5.2 关键技术细节（踩过的坑）
 
-1. **不能覆盖函数开头的 `call __fentry__`（`e8 00 00 00 00`）**
+1. **不能覆盖函数开头的 `call __fentry__`（`e8 00 00 00 00`）**（粗暴版才会碰到）
    那是重定位点，覆盖后 `insmod` 会报：
    `Invalid relocation target, existing value is nonzero for type 4`
    → 必须打在 **`foff + 5`**（call 之后）。
@@ -223,33 +246,43 @@ IGD legacy 模式有可能完整工作，连显示输出都可能恢复。这一
 3. **`insmod` 不会自动加载依赖**
    必须先 `modprobe vfio_pci_core`，再 `insmod` 补丁版 `vfio-pci.ko`。
 
+4. **改指令时注意偏移**
+   `81 78 44 <disp8> <imm32>` 一共 7 字节，立即数在 **+3** 处；
+   错写成 +6 会覆盖后面的 `jne`，模块虽然能加载但函数已损坏。
+
 ### 5.3 补丁脚本
 
-见 `patch/repatch-vfio.sh`（主机上一键重打，内核升级后必用）：
+| 文件 | 作用 |
+|---|---|
+| `patch/patch_vfio.py` | 打补丁核心：定位符号 → 改立即数（找不到时自动回退粗暴版）→ 剥签名 |
+| `patch/repatch-vfio.sh` | 主机上一键重打，内核升级后必用 |
 
 ```bash
-/root/repatch-vfio.sh          # 对当前内核
-/root/repatch-vfio.sh 6.14.11-4-pve
+./repatch-vfio.sh                 # 当前内核
+./repatch-vfio.sh 6.14.11-4-pve   # 指定内核
+./repatch-vfio.sh --mode blunt    # 需要粗暴版时
 ```
 
-核心逻辑（Python 片段）：
+脚本会先把原版模块存成 `$KO.orig-backup`，之后每次都从这份原件重新生成，
+所以可以反复执行。核心逻辑：
 
 ```python
-# 1) 解析 ELF 节表，定位符号 vfio_pci_igd_init
-# 2) 计算文件偏移 foff = section_offset + (st_value - section_addr)
-# 3) 若首字节为 0xE8（call rel32，ftrace 的 __fentry__），补丁打在 foff+5
-pos = foff + 5 if data[foff] == 0xE8 else foff
-data[pos:pos+3] = b'\x31\xc0\xc3'      # xor eax,eax ; ret
-# 4) 剥签名
+# 1) 解析 ELF 节表，定位符号 vfio_pci_igd_init，算文件偏移
+#    foff = section_offset + (st_value - section_addr)
+# 2) 在函数体里搜 81 78 44 00 00 06 00（cmpl $0x60000），
+#    把 +3 处的立即数改成 0x00060400；找不到则回退粗暴版
+# 3) 剥掉模块签名
 ```
 
 ### 5.4 安装
 
 ```bash
-cp vfio-pci-6.14-patched.ko /lib/modules/6.14.11-4-pve/kernel/drivers/vfio/pci/vfio-pci.ko
+cp vfio-pci-6.14-igdclass.ko /lib/modules/6.14.11-4-pve/kernel/drivers/vfio/pci/vfio-pci.ko
 depmod -a 6.14.11-4-pve
 reboot
 ```
+
+或直接跑 `repatch-vfio.sh`，效果相同。
 
 ---
 
@@ -315,21 +348,28 @@ Bus 0, device 16, function 0:
 ### 虚拟机侧
 
 ```
-bios:     ovmf（可选，当前极简版用默认 SeaBIOS）
+bios:     ovmf（Windows Server 2025，efidisk pre-enrolled-keys=1 即 Secure Boot）
 machine:  pc-i440fx-11.0
-hostpci0: 0000:00:02.0
-vga:      std
+hostpci0: 0000:00:02.0      ← 裸设备，无 romfile、无任何参数
+vga:      std               ← 提供 VNC 控制台
+sata0:    32G 系统盘（sd 存储）
+ide2:     Windows Server 2025 ISO
 ```
+
+> 注：`legacy-igd=1` + `vga: none` 的写法虽然能启动，但对 Rocket Lake 不会产生显示输出
+> （见 3.5），所以实际使用的是上面的 `vga: std` 方案。
 
 ---
 
 ## 8. 注意事项
 
-1. **内核升级会覆盖补丁**，升级后必须执行 `/root/repatch-vfio.sh && reboot`。
-2. **不要回退到 7.0.2 内核**（其模块未打补丁，且该版本函数入口是 `jmp rel32`，
-   补丁位置与 6.14 不同）。若要回退，需先分析跳转目标再打补丁。
+1. **内核升级会覆盖补丁**，升级后必须执行 `repatch-vfio.sh && reboot`。
+2. **不要回退到 7.0.2 内核**（其模块未打补丁）。若确实要回退，先跑
+   `repatch-vfio.sh 7.0.2-6-pve`——脚本会自动定位那处 `cmpl`，
+   找不到时回退到粗暴版；然后实测能否启动再用。
 3. 模块未签名，内核会带 `tainted` 标记，属正常现象。
-4. **显示输出不可用**（QEMU 未走 IGD legacy 分支），符合"只算力"用途。
+4. **显示输出不可用**：精细补丁虽然提供了完整 opregion，但 QEMU 的 IGD legacy 模式
+   只支持 6~9 代，Rocket Lake（12 代）不在范围内，实测黑屏。算力用途不受影响。
 5. `dmesg` 里的 `Invalid PCI ROM header signature: expecting 0xaa55, got 0x0000`
    是无害警告（设备 ROM BAR 为空）。
 
@@ -367,9 +407,10 @@ pve-p750-igpu-passthrough/
 ├── README.md                        本文档
 ├── patch/
 │   ├── repatch-vfio.sh              主机一键重打补丁脚本（内核升级后必用）
-│   ├── patch_vfio.py                早期补丁脚本（计算偏移 + 剥签名）
+│   ├── patch_vfio.py                打补丁核心（精细版 + 粗暴版回退 + 剥签名）
 │   ├── vfio-pci-6.14.ko.orig        原版模块（38945 字节，含签名）
-│   └── vfio-pci-6.14-patched.ko     补丁后模块（38224 字节，无签名）
+│   ├── vfio-pci-6.14-igdclass.ko    ★ 精细版补丁模块（38224 字节，当前使用）
+│   └── vfio-pci-6.14-blunt.ko       粗暴版补丁模块（38224 字节，备用）
 ├── tools/
 │   ├── find_opregion.py             在 ACPI NVS 中定位 opregion 物理地址
 │   ├── scan_phys.py                 通过 /proc/kcore 扫描物理内存特征串
