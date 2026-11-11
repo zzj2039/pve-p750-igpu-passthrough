@@ -1,0 +1,8 @@
+Linux pve 6.14.11-4-pve #1 SMP PREEMPT_DYNAMIC PMX 6.14.11-4 (2025-10-10T08:04Z) x86_64 GNU/Linux
+00:02.0 VGA compatible controller [0300]: Intel Corporation RocketLake-S GT1 [UHD Graphics P750] [8086:4c90] (rev 04)
+	DeviceName: Onboard - Video
+	Subsystem: Gigabyte Technology Co., Ltd Device [1458:d000]
+	Kernel driver in use: vfio-pci
+	Kernel modules: i915, xe
+BOOT_IMAGE=/boot/vmlinuz-6.14.11-4-pve root=/dev/mapper/pve-root ro quiet intel_iommu=on initcall_blacklist=sysfb_init
+59aa70e95bfead87f27d63de762c52a5  /lib/modules/6.14.11-4-pve/kernel/drivers/vfio/pci/vfio-pci.ko

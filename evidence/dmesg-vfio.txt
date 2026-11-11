@@ -1,0 +1,58 @@
+[    0.016820] ACPI: DMAR 0x0000000094F55000 0000A8 (v01 INTEL  EDK2     00000002      01000013)
+[    0.016842] ACPI: Reserving DMAR table memory at [mem 0x94f55000-0x94f550a7]
+[    0.057383] DMAR: IOMMU enabled
+[    0.149351] DMAR: Host address width 39
+[    0.149352] DMAR: DRHD base: 0x000000fed90000 flags: 0x0
+[    0.149361] DMAR: dmar0: reg_base_addr fed90000 ver 4:0 cap 1c0000c40660462 ecap 69e2ff0505e
+[    0.149363] DMAR: DRHD base: 0x000000fed91000 flags: 0x1
+[    0.149368] DMAR: dmar1: reg_base_addr fed91000 ver 1:0 cap d2008c40660462 ecap f050da
+[    0.149370] DMAR: RMRR base: 0x000000958da000 end: 0x00000095b23fff
+[    0.149372] DMAR: RMRR base: 0x0000009b000000 end: 0x0000009f7fffff
+[    0.149373] DMAR-IR: IOAPIC id 2 under DRHD base  0xfed91000 IOMMU 1
+[    0.149374] DMAR-IR: HPET id 0 under DRHD base 0xfed91000
+[    0.149375] DMAR-IR: Queued invalidation will be enabled to support x2apic and Intr-remapping.
+[    0.152114] DMAR-IR: Enabled IRQ remapping in x2apic mode
+[    1.569691] pci 0000:00:02.0: DMAR: Skip IOMMU disabling for graphics
+[    1.661532] DMAR: No ATSR found
+[    1.661533] DMAR: No SATC found
+[    1.661534] DMAR: dmar0: Using Queued invalidation
+[    1.661536] DMAR: dmar1: Using Queued invalidation
+[    1.663791] DMAR: Intel(R) Virtualization Technology for Directed I/O
+[   10.439592] VFIO - User Level meta-driver version: 0.3
+[   10.442762] vfio_pci: module verification failed: signature and/or required key missing - tainting kernel
+[   11.080370] i915 0000:00:02.0: [drm] Found rocketlake (device ID 4c90) integrated display version 12.00 stepping C0
+[   11.080919] i915 0000:00:02.0: [drm] VT-d active for gfx access
+[   11.080922] i915 0000:00:02.0: vgaarb: deactivate vga console
+[   11.080965] i915 0000:00:02.0: [drm] Using Transparent Hugepages
+[   11.082333] i915 0000:00:02.0: vgaarb: VGA decodes changed: olddecodes=io+mem,decodes=io+mem:owns=io+mem
+[   11.083503] i915 0000:00:02.0: [drm] Finished loading DMC firmware i915/rkl_dmc_ver2_03.bin (v2.3)
+[   11.084305] mei_pxp 0000:00:16.0-fbf6fcf1-96cf-4e2e-a6a6-1bab8cbe36b1: bound 0000:00:02.0 (ops i915_pxp_tee_component_ops [i915])
+[   11.084403] i915 0000:00:02.0: [drm] Protected Xe Path (PXP) protected content support initialized
+[   11.084405] mei_hdcp 0000:00:16.0-b638ab7e-94e2-4ea2-a552-d1c54b627f04: bound 0000:00:02.0 (ops i915_hdcp_ops [i915])
+[   11.119379] [drm] Initialized i915 1.6.0 for 0000:00:02.0 on minor 0
+[   11.168721] fbcon: i915drmfb (fb0) is primary device
+[   11.255866] i915 0000:00:02.0: [drm] fb0: i915drmfb frame buffer device
+[   11.298018] snd_hda_intel 0000:00:1f.3: bound 0000:00:02.0 (ops i915_audio_component_bind_ops [i915])
+[   51.787616] i915 0000:00:02.0: [drm] *ERROR* audio power refcount 1 after unbind
+[   51.932038] i915 0000:00:02.0: [drm] i915 raw-wakerefs=1 wakelocks=1 on cleanup
+[   51.932055] WARNING: CPU: 11 PID: 1380 at drivers/gpu/drm/i915/intel_runtime_pm.c:443 intel_runtime_pm_driver_release+0x75/0x90 [i915]
+[   51.932116] Modules linked in: ebtable_filter ebtables ip_set ip6table_raw iptable_raw ip6table_filter ip6_tables iptable_filter sunrpc nf_tables bonding tls softdog binfmt_misc nfnetlink_log snd_hda_codec_hdmi snd_hda_codec_realtek snd_hda_codec_generic snd_hda_scodec_component xe drm_gpuvm gpu_sched drm_ttm_helper drm_exec drm_suballoc_helper sch_fq_codel intel_rapl_msr intel_rapl_common intel_uncore_frequency intel_uncore_frequency_common x86_pkg_temp_thermal intel_powerclamp coretemp snd_soc_avs kvm_intel snd_soc_hda_codec snd_hda_ext_core i915 snd_soc_core snd_compress ac97_bus kvm snd_pcm_dmaengine snd_hda_intel snd_intel_dspcfg snd_intel_sdw_acpi mei_hdcp mei_pxp drm_buddy snd_hda_codec polyval_clmulni polyval_generic ttm ghash_clmulni_intel sha256_ssse3 snd_hda_core drm_display_helper sha1_ssse3 snd_hwdep aesni_intel snd_pcm intel_pmc_core cec crypto_simd cmdlinepart snd_timer pmt_telemetry cryptd rc_core spi_nor mei_me snd pmt_class intel_cstate gigabyte_wmi mtd wmi_bmof intel_wmi_thunderbolt ee1004 soundcore
+[   51.932145]  pcspkr i2c_algo_bit mei intel_pch_thermal intel_vsec acpi_pad acpi_tad mac_hid zfs(PO) spl(O) vfio_pci(E) vfio_pci_core irqbypass vfio_iommu_type1 vfio iommufd msr vhost_net vhost vhost_iotlb tap efi_pstore nfnetlink dmi_sysfs ip_tables x_tables autofs4 btrfs blake2b_generic xor raid6_pq hid_generic usbhid hid nvme xhci_pci mpt3sas i2c_i801 spi_intel_pci e1000e nvme_core xhci_hcd ahci i2c_mux spi_intel raid_class igc i2c_smbus nvme_auth scsi_transport_sas libahci video wmi pinctrl_cannonlake
+[   51.932170] RIP: 0010:intel_runtime_pm_driver_release+0x75/0x90 [i915]
+[   51.932219]  i915_driver_release+0x76/0xa0 [i915]
+[   51.932656] vfio-pci 0000:00:02.0: vgaarb: deactivate vga console
+[   51.932658] vfio-pci 0000:00:02.0: vgaarb: VGA decodes changed: olddecodes=io+mem,decodes=io+mem:owns=io+mem
+[   51.932856] vfio-pci 0000:00:02.0: resetting
+[   52.040200] vfio-pci 0000:00:02.0: reset done
+[   52.735869] vfio-pci 0000:00:02.0: resetting
+[   52.840161] vfio-pci 0000:00:02.0: reset done
+[   52.840798] vfio-pci 0000:00:02.0: Invalid PCI ROM header signature: expecting 0xaa55, got 0x0000
+[   52.847432] vfio-pci 0000:00:02.0: resetting
+[   52.952149] vfio-pci 0000:00:02.0: reset done
+[  341.409590] vfio-pci 0000:00:02.0: resetting
+[  341.513770] vfio-pci 0000:00:02.0: reset done
+[  342.207545] vfio-pci 0000:00:02.0: resetting
+[  342.313902] vfio-pci 0000:00:02.0: reset done
+[  342.314548] vfio-pci 0000:00:02.0: Invalid PCI ROM header signature: expecting 0xaa55, got 0x0000
+[  342.320209] vfio-pci 0000:00:02.0: resetting
+[  342.425940] vfio-pci 0000:00:02.0: reset done
