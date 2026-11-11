@@ -5,6 +5,10 @@
 >
 > 最终结论：**唯一有效的手段是对内核模块 `vfio-pci.ko` 打二进制补丁**，
 > 让 `vfio_pci_igd_init()` 直接返回 0。不需要 BIOS 特殊设置、不需要显卡 ROM、不需要任何 QEMU 参数。
+>
+> 根因：技嘉 BIOS 把 `00:00.0`（Host Bridge `8086:4c43`）的 PCI class 枚举成 `0x0604`（PCI bridge）
+> 而非规范的 `0x0600`（Host Bridge），导致内核 `vfio_pci_igd_cfg_init()` 直接 `return -EINVAL`。
+> 详见 [第 3 节](#3-根因)。
 
 ---
 
@@ -60,34 +64,109 @@ vfio-pci 0000:00:02.0: Failed to setup Intel IGD regions   ← 真正的失败�
 
 ## 3. 根因
 
-Linux 内核的 vfio-pci 在打开 Intel 核显（class 为 VGA、vendor 为 Intel）时，
-会强制调用 `vfio_pci_igd_init()`，其中第一步是读取显卡 MMIO：
+> **⚠️ 本节于 2026-11-11 修订。** 最初的判断（"BIOS 没有写 opregion 寄存器"）是**错误**的：
+> 当时读的是 **MMIO 的 `BAR0+0xFC`**，而真正的 opregion 基址寄存器位于
+> **PCI 配置空间的 `0xFC`**——那里一直有有效值。以下是修正后的结论。
+
+### 3.1 内核判定链路
+
+`vfio_pci_igd_init()` 依次调用两个子函数（源码 `drivers/vfio/pci/vfio_pci_igd.c`）：
+
+```c
+int vfio_pci_igd_init(struct vfio_pci_core_device *vdev)
+{
+	ret = vfio_pci_igd_opregion_init(vdev);   // ① 读 cfg 0xFC，映射 opregion
+	if (ret)
+		return ret;
+	ret = vfio_pci_igd_cfg_init(vdev);        // ② 读取 host bridge / LPC 配置区
+	if (ret)
+		return ret;
+	return 0;
+}
+```
+
+### 3.2 实测返回值：-EINVAL
+
+用 kretprobe 抓原版模块中该函数的返回值：
 
 ```
-BAR0 + 0xFC  →  IGD OpRegion 基地址寄存器
+igdi: (vfio_pci_open_device+0x65/0x80 [vfio_pci] <- vfio_pci_igd_init) arg1=-22
 ```
 
-**这块主板的 BIOS 从不写这个寄存器**，读出来恒为 `0`，于是：
+`-22` 即 `-EINVAL`。而该函数中只有两处会返回 `EINVAL`：
 
-1. `vfio_pci_igd_init()` 判定 opregion 无效 → 返回错误
-2. 设备 open 失败
-3. QEMU 的 `VFIO_GROUP_GET_DEVICE` 得到 `EINVAL`
-4. 虚拟机启动失败
+| # | 位置 | 触发条件 | 本机实测 |
+|---|---|---|---|
+| ① | `vfio_pci_igd_opregion_init()` | 签名不符，或 `size == 0` | ✅ **通过**（见 3.3） |
+| ② | `vfio_pci_igd_cfg_init()` | `00:00.0` 不是 Intel **Host Bridge** | ❌ **失败**（见 3.4） |
 
-### 关键证据
+### 3.3 opregion 完全正常
 
-| 证据 | 说明 |
-|---|---|
-| `dmesg` 中 `Failed to setup Intel IGD regions` 紧跟 `reset done` | 失败发生在设备 open 路径，在 reset 之后 |
-| ACPI `SSDT3` 中存在 `IGDP` / `ASLS` / `ASLB` | BIOS 在 **ACPI 层**定义了 opregion |
-| `/sys/kernel/debug/dri/0/i915_opregion` 内容以 `IntelGraphicsMem` 开头 | i915（走 ACPI）能正常拿到 opregion ⇒ **主机显示正常** |
-| `BAR0+0xFC` 读数为 `0x00000000`（干净启动、零复位时） | vfio（走 MMIO）拿不到 ⇒ 只有 vfio 失败 |
-| 手工向 `0xFC` 写入候选地址，读回仍为 0 | 该寄存器在 OS 阶段**写保护**，只有 BIOS 能写 |
-| `/proc/vmallocinfo` 中 `x86_acpi_os_ioremap` 有 8192 字节映射，`phys=0x94fc4000` | opregion 物理地址确实存在且大小 8KB，与 SSDT 声明的 `0x2000` 一致 |
+```
+$ setpci -s 0000:00:02.0 fc.l
+953ce018                     ← PCI 配置空间 0xFC 里的 opregion 基址
+```
 
-**一句话：ACPI 里有一份 opregion，MMIO 寄存器里没有；i915 用 ACPI 所以正常，vfio-pci 只认 MMIO 所以失败。**
+直接读该物理地址（`dd if=/dev/mem`）：
 
-这是主板固件缺陷，PVE 侧没有任何参数能绕过。
+```
+000000  49 6e 74 65 6c 47 72 61 70 68 69 63 73 4d 65 6d   IntelGraphicsMem
+000010  08 00 00 00 00 00 01 02 00 00 00 00 00 00 00 00
+```
+
+- 签名 `IntelGraphicsMem` ✅
+- 偏移 `0x10` 的 size 字段 = `8`（KB），非零 ✅
+- 版本 `0x0201`，RVDA = `0x2000`，RVDS = `0x2200`
+
+因此 ① 不可能返回 `EINVAL`。
+
+### 3.4 真正的原因：`00:00.0` 的 PCI class code 错误
+
+`vfio_pci_igd_cfg_init()` 的第一段：
+
+```c
+host_bridge = pci_get_domain_bus_and_slot(0, 0, PCI_DEVFN(0, 0));
+if (host_bridge->vendor != PCI_VENDOR_ID_INTEL ||
+    host_bridge->class != (PCI_CLASS_BRIDGE_HOST << 8))   // 必须为 0x060000
+	return -EINVAL;
+```
+
+本机实际：
+
+```
+0000:00:00.0  class=0x060400  PCI bridge: Intel Corporation Device [8086:4c43]
+0000:00:1f.0  class=0x060100  ISA bridge: W480 Chipset LPC/eSPI Controller（该项通过）
+```
+
+`00:00.0` 是 CPU 的 Host Bridge（`8086:4c43` = Rocket Lake-S Host Bridge/DRAM Registers），
+但 **BIOS 把它的 class 枚举成了 `0x0604`（PCI-to-PCI bridge），按规范应为 `0x0600`（Host Bridge）**。
+
+于是 `0x060400 != 0x060000` → `return -EINVAL` → 打印 `Failed to setup Intel IGD regions`。
+
+**结论：这是技嘉 BIOS 的 PCI class code 枚举缺陷，与 IGD OpRegion 无关。**
+
+### 3.5 为什么补丁有效，以及更精细的方案
+
+补丁让 `vfio_pci_igd_init()` 整体直接返回 0，两个子函数都不执行，因此绕过了 ② 的 class 校验。
+代价是 ① 也没执行——opregion region 没有注册给 QEMU，所以 QEMU 不会进入 IGD legacy 模式，显示输出不可用（本方案本来也不需要显示）。
+
+理论上更精细的做法是**只跳过 ②、保留 ①**：opregion 仍会注册给 QEMU，
+IGD legacy 模式有可能完整工作，连显示输出都可能恢复。这一点未验证。
+
+### 3.6 与 Proxmox 论坛同类案例的对比
+
+[forum.proxmox.com - igd Passthru on Intel Sandy Bridge](https://forum.proxmox.com/threads/igd-passthru-on-intel-sandy-bridge.88160/)
+中出现完全相同的日志 `Failed to setup Intel IGD regions`，但**根因不同**：
+
+| | 论坛案例（Sandy Bridge / HP） | 本案例（Rocket Lake / 技嘉 W480） |
+|---|---|---|
+| 失败分支 | ① `opregion_init` | ② `cfg_init` |
+| 具体原因 | opregion 中 `+0x10` 的 **size 字段**被 BIOS 写坏（≠8） | `00:00.0` 的 **class code** 为 `0x0604` |
+| 判据 | `dd ... skip=$((addr+16)) count=4` 输出不是 `08 00 00 00` | `cat /sys/bus/pci/devices/0000:00:00.0/class` = `0x060400` |
+| 修法 | 用 `/dev/mem` 把该字段改成 `08 00 00 00`，每次重启重做 | 本仓库的内核模块补丁（或等 BIOS 修复 class code） |
+
+本机 opregion 的 size 字段实测就是 `08 00 00 00`，**所以论坛那招对本机无效**。
+排查时可用 3.2 的 kprobe 方法快速区分失败在 ① 还是 ②。
 
 ---
 
@@ -111,7 +190,8 @@ BAR0 + 0xFC  →  IGD OpRegion 基地址寄存器
 | BIOS `Above 4G Decoding=Disabled` + `Re-Size BAR=Disabled`（BAR 从 `0x6000000000` 压到 `0xb0000000`） | 无效 |
 | 关闭 `initcall_blacklist=sysfb_init` 以外的 framebuffer 相关 | 无效 |
 | 改 PCI class code 让内核不认为是 VGA | class 寄存器**只读**，写不进 |
-| 手工向 `BAR0+0xFC` 写入 opregion 物理地址 | 寄存器**写保护**，读回仍为 0 |
+| 通过 MMIO `BAR0+0xFC` 注入 opregion 地址 | **读错了寄存器**——真正的基址在 PCI 配置空间 `0xFC`；该 MMIO 位置无意义 |
+| 按论坛方案修 opregion `+0x10` 的 size 字段 | 本机该字段已正确（=8），不适用 |
 | 换内核 6.14.11 | 报错完全一致 ⇒ 不是内核版本问题 |
 | 换 BIOS 设置、接真实显示器（HPD 正常、画面正常） | 无效 |
 
@@ -322,12 +402,13 @@ pve-p750-igpu-passthrough/
 | 主机配置 | GRUB `intel_iommu=on`、vfio 绑定、屏蔽 i915 | ✅ 生效 |
 | 首次启动 | `legacy-igd=1` + ROM | ❌ `Failed to setup Intel IGD regions` |
 | 排查 | 换 ROM、调 QEMU 参数、改 BIOS（CSM / Above 4G / ReBAR）、接真实显示器 | ❌ 全部无效 |
-| 定位 | 读 `BAR0+0xFC` = 0；ACPI 有 opregion、MMIO 没有 | 🎯 锁定根因 |
+| 初判（后证伪） | 误读 MMIO `BAR0+0xFC` = 0，以为 opregion 未初始化 | ❌ 结论错误 |
 | 尝试绕过 | 改 PCI class（只读）、手写 0xFC（写保护） | ❌ 硬性阻断 |
 | 换内核 | 7.0.2 → 6.14.11 | ❌ 报错一致 |
 | **突破** | **二进制补丁 `vfio_pci_igd_init()` → `return 0`** | ✅ **VM 正常启动** |
 | 固化 | 剥签名、装入 `/lib/modules`、`depmod`、重启验证 | ✅ 持久化 |
 | 最小化验证 | 裸 `hostpci0`、无 ROM、无参数 | ✅ 依然工作 |
+| **根因修正** | kprobe 抓返回 `-22`；`setpci fc.l` 发现 cfg 0xFC 有值；定位到 `00:00.0` class=`0x0604` | 🎯 **真正根因** |
 
 ---
 
